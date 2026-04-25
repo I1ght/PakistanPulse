@@ -1,5 +1,10 @@
+export const config = {
+  api: {
+    bodyParser: true,
+  },
+};
+
 export default async function handler(req, res) {
-  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -7,17 +12,21 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  // Check API key exists
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    console.error('ANTHROPIC_API_KEY is not set');
-    return res.status(500).json({ error: 'Server misconfiguration: API key not found in environment variables.' });
+    return res.status(500).json({ error: 'Server misconfiguration: API key not set.' });
   }
 
-  const { prompt } = req.body || {};
-  if (!prompt) return res.status(400).json({ error: 'Missing prompt in request body' });
+  // Handle body whether it arrives as string or object
+  let body = req.body;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch { return res.status(400).json({ error: 'Invalid JSON body' }); }
+  }
 
-  console.log('Calling Anthropic for:', prompt.slice(0, 80));
+  const prompt = body?.prompt;
+  if (!prompt) {
+    return res.status(400).json({ error: `Missing prompt. Body received: ${JSON.stringify(body)}` });
+  }
 
   try {
     const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
@@ -35,14 +44,12 @@ export default async function handler(req, res) {
     });
 
     const raw = await anthropicRes.text();
-    console.log('Anthropic status:', anthropicRes.status);
-    console.log('Anthropic response:', raw.slice(0, 300));
 
     if (!anthropicRes.ok) {
       let parsed = {};
       try { parsed = JSON.parse(raw); } catch {}
       return res.status(anthropicRes.status).json({
-        error: parsed.error?.message || `Anthropic error ${anthropicRes.status}: ${raw.slice(0, 200)}`
+        error: parsed.error?.message || `Anthropic error ${anthropicRes.status}`
       });
     }
 
@@ -51,7 +58,6 @@ export default async function handler(req, res) {
     return res.status(200).json({ result: text });
 
   } catch (err) {
-    console.error('Fetch to Anthropic failed:', err);
-    return res.status(500).json({ error: `Network error reaching Anthropic: ${err.message}` });
+    return res.status(500).json({ error: `Failed to reach Anthropic: ${err.message}` });
   }
 }
