@@ -1,0 +1,8 @@
+{
+  "name": "pakistan-pulse",
+  "version": "2.0.0",
+  "private": true,
+  "dependencies": {
+    "@vercel/kv": "^1.0.0"
+  }
+}
