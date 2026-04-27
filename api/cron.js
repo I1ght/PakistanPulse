@@ -34,46 +34,58 @@ async function callGroq(prompt) {
 
 function buildScanPrompt(category, existingNames) {
   const exclusions = existingNames.length > 0
-    ? `Do NOT include any of these already-tracked people: ${existingNames.join(', ')}.`
+    ? `Do NOT include any of these already-tracked people: ${existingNames.slice(0, 80).join(', ')}.`
     : '';
 
-  return `You are an intelligence analyst building a comprehensive database of Pakistani public figures and their stances on Israel and the Israeli-Palestinian conflict.
+  return `You are a political analyst building a comprehensive database of Pakistani public figures and their stance on Zionism and the Israeli-Palestinian conflict.
 
-Focus specifically on: ${category}
-
+Focus on: ${category}
 ${exclusions}
 
-Generate a list of 20 Pakistani personalities from the category above who have publicly expressed views on Israel, Gaza, or the Israeli-Palestinian conflict. Cast a wide net — include well-known and lesser-known figures, historical and current, those with strong opinions and those with mild ones.
+Generate 20 Pakistani personalities from this category who have publicly expressed views on Israel, Zionism, Gaza, or the Palestinian cause.
 
-Respond ONLY with a valid JSON array — no markdown, no text outside the JSON:
+CLASSIFICATION RULES:
+- "pro" (Zionist): Explicitly supports Israel's existence as a Jewish state, defends Israeli military actions, or advocates normalization.
+- "neutral": Supports a two-state solution, calls for peace/negotiations, ambiguous, or diplomatic. Two-state solution supporters MUST be neutral.
+- "anti" (Anti-Zionist): Opposes Zionism ideologically, supports Palestinian resistance, supports BDS, or describes Israel as apartheid/colonial.
+
+ANTI-ZIONIST-O-METER — be conservative:
+- 0-20: Strongly Zionist
+- 21-40: Leaning Zionist
+- 41-59: Neutral (two-state, ambiguous, diplomatic)
+- 60-74: Mild Anti-Zionist (critical of Israeli policies, supports Palestinian rights)
+- 75-87: Strong Anti-Zionist (opposes Zionism ideologically)
+- 88-100: Extreme (only for truly extreme rhetoric — glorifying violence, dehumanizing language)
+
+Most Pakistani public figures fall 60-80. Only use 88+ for genuinely extreme cases. Default to neutral if unclear.
+
+Respond ONLY with a valid JSON array — no markdown, no text outside JSON:
 
 [
   {
     "name": "<full name>",
-    "role": "<one of: Politician | Government Official | Journalist | Influencer | Military | Religious Figure | Academic | Businessperson | Other>",
+    "role": "<Politician | Government Official | Journalist | Influencer | Military | Religious Figure | Academic | Businessperson | Other>",
     "stance": "anti" | "pro" | "neutral",
     "meter": <integer 0-100>,
-    "analysis": "<2-3 sentence factual summary of their Israel stance>",
+    "analysis": "<2-3 sentence factual summary>",
     "statements": [
-      { "text": "<paraphrased or actual public statement>", "source": "<context e.g. Dawn interview 2023>" }
+      { "text": "<paraphrased or actual statement>", "source": "<context>" }
     ]
   }
 ]
 
-Meter scale: 0-30=pro-Israel, 31-54=neutral, 55-70=mild anti-Israel, 71-85=strong anti-Israel, 86-100=extreme anti-Israel rhetoric.
-Include 1-3 statements per person. If stance is unclear set neutral and meter 50.
 Return ONLY the JSON array with all 20 entries.`;
 }
 
 const CATEGORIES = [
-  'Pakistani Politicians (federal and provincial, all parties — PTI, PMLN, PPP, MQM, JUI, etc.)',
-  'Pakistani Journalists, news anchors, columnists, and media personalities',
-  'Pakistani Religious Scholars, clerics, Imams, and Islamic organizations',
+  'Pakistani Politicians (federal and provincial — PTI, PMLN, PPP, MQM, JUI, JI, and independents)',
+  'Pakistani Journalists, news anchors, columnists, and print/TV media personalities',
+  'Pakistani Religious Scholars, clerics, Imams, and Islamic organization leaders',
   'Pakistani Military figures, ex-generals, defense analysts, and retired officers',
-  'Pakistani Social Media Influencers, YouTubers, and digital content creators',
-  'Pakistani Academics, university professors, intellectuals, and think tank analysts',
-  'Pakistani Government Officials, diplomats, ambassadors, and bureaucrats',
-  'Pakistani Businesspeople, entrepreneurs, and civil society leaders',
+  'Pakistani Social Media Influencers, YouTubers, podcasters, and digital content creators',
+  'Pakistani Academics, university professors, public intellectuals, and think tank analysts',
+  'Pakistani Government Officials, diplomats, ambassadors, ministers, and senior bureaucrats',
+  'Pakistani Businesspeople, civil society leaders, lawyers, and human rights activists',
 ];
 
 export default async function handler(req, res) {
@@ -89,7 +101,6 @@ export default async function handler(req, res) {
   const redis = getRedis();
 
   try {
-    // Get all existing names to avoid duplicates
     const existing = await redis.hgetall('personalities') || {};
     const existingKeys = new Set(Object.keys(existing).map(k => k.toLowerCase()));
     const existingNames = Object.values(existing).map(v => {
@@ -99,7 +110,6 @@ export default async function handler(req, res) {
     let totalAdded = 0;
     const allResults = [];
 
-    // Scan each category in parallel batches of 2 to avoid rate limits
     for (let i = 0; i < CATEGORIES.length; i += 2) {
       const batch = CATEGORIES.slice(i, i + 2);
 
@@ -147,20 +157,10 @@ export default async function handler(req, res) {
       }));
 
       allResults.push(...batchResults);
-
-      // Small delay between batches to respect Groq rate limits
-      if (i + 2 < CATEGORIES.length) {
-        await new Promise(r => setTimeout(r, 1000));
-      }
+      if (i + 2 < CATEGORIES.length) await new Promise(r => setTimeout(r, 1000));
     }
 
-    return res.status(200).json({
-      success: true,
-      totalAdded,
-      categoriesScanned: CATEGORIES.length,
-      results: allResults,
-    });
-
+    return res.status(200).json({ success: true, totalAdded, categoriesScanned: CATEGORIES.length, results: allResults });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
