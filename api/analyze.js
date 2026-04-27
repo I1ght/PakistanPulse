@@ -33,26 +33,39 @@ async function callGroq(prompt) {
 }
 
 function buildPrompt(name, role, extraStatement) {
-  return `You are an expert analyst of Pakistani public figures and their stances on Israel and the Israeli-Palestinian conflict.
+  return `You are a political analyst building a database of Pakistani public figures and their stance on Zionism and the Israeli-Palestinian conflict.
 
 Analyze: ${name} (${role}, Pakistan)
-${extraStatement ? `User-provided statement: "${extraStatement}"` : ''}
+${extraStatement ? `Known statement provided: "${extraStatement}"` : ''}
 
-Based on their publicly known statements, interviews, speeches, and social media activity, classify their stance.
+Classify their stance using STRICT criteria:
+
+CLASSIFICATION RULES:
+- "pro" (Zionist): Explicitly supports Israel's right to exist as a Jewish state, defends Israeli military actions, advocates normalization with Israel, or opposes BDS movement.
+- "neutral": Supports a two-state solution, calls for peace negotiations, avoids taking a strong stance, or whose statements are ambiguous. Two-state solution supporters MUST be classified neutral.
+- "anti" (Anti-Zionist): Explicitly opposes Zionism as a political ideology, supports Palestinian resistance, calls for a single democratic state, supports BDS, or describes Israel as an apartheid/colonial state.
+
+ANTI-ZIONIST-O-METER (0-100) — be conservative and precise:
+- 0-20: Strongly Zionist (actively defends Israel, supports Israeli policies)
+- 21-40: Leaning Zionist (mild support, pro-normalization)
+- 41-59: Neutral (two-state solution, ambiguous, diplomatic)
+- 60-74: Mild Anti-Zionist (critical of Israeli policies, supports Palestinian rights, supports two-state)
+- 75-87: Strong Anti-Zionist (opposes Zionism ideologically, supports Palestinian resistance)
+- 88-100: Extreme Anti-Zionist (calls for dismantling Israel, glorifies violence, dehumanizing rhetoric)
+
+IMPORTANT: Most Pakistani politicians fall in the 60-80 range. Only assign 88+ for truly extreme rhetoric. Two-state solution supporters should score 50-65 maximum. Default to neutral if unclear.
 
 Respond ONLY with a valid JSON object — no markdown, no text outside JSON:
 
 {
   "stance": "anti" | "pro" | "neutral",
   "meter": <integer 0-100>,
-  "analysis": "<2-3 sentence factual summary>",
+  "analysis": "<2-3 sentence factual summary of their stance on Zionism and Israel>",
   "statements": [
-    { "text": "<paraphrased or actual statement>", "source": "<context, e.g. National Assembly 2023>" }
+    { "text": "<paraphrased or actual public statement>", "source": "<context e.g. Dawn interview 2023>" }
   ]
 }
 
-Meter scale: 0-30=pro-Israel, 31-54=neutral, 55-70=mild anti-Israel, 71-85=strong anti-Israel, 86-100=extreme.
-Include 1-3 statements. If person is unknown set stance neutral and meter 50.
 Return ONLY the JSON.`;
 }
 
@@ -79,7 +92,7 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   if (!process.env.GROQ_API_KEY) return res.status(500).json({ error: 'GROQ_API_KEY not set' });
-  if (!process.env.UPSTASH_REDIS_REST_URL) return res.status(500).json({ error: 'Upstash Redis not configured. Add UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN to env vars.' });
+  if (!process.env.UPSTASH_REDIS_REST_URL) return res.status(500).json({ error: 'Upstash Redis not configured' });
 
   let body = req.body;
   if (typeof body === 'string') {
@@ -98,9 +111,7 @@ export default async function handler(req, res) {
     const parsed = parseResponse(raw);
     const personality = {
       id: Date.now(),
-      name,
-      role,
-      ...parsed,
+      name, role, ...parsed,
       date: new Date().toISOString().split('T')[0],
       source: 'manual',
     };
