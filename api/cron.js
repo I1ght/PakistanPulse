@@ -1,6 +1,6 @@
 import { Redis } from '@upstash/redis';
 
-export const config = { api: { bodyParser: true } };
+export const config = { api: { bodyParser: true, }, maxDuration: 60 };
 
 function getRedis() {
   return new Redis({
@@ -18,7 +18,7 @@ async function callGroq(prompt) {
     },
     body: JSON.stringify({
       model: 'llama-3.3-70b-versatile',
-      max_tokens: 6000,
+      max_tokens: 2000,
       temperature: 0.5,
       messages: [{ role: 'user', content: prompt }],
     }),
@@ -32,41 +32,63 @@ async function callGroq(prompt) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-function buildScanPrompt(category, existingNames) {
+function buildAntiZionistPrompt(category, existingNames) {
   const exclusions = existingNames.length > 0
-    ? `Do NOT include any of these already-tracked people: ${existingNames.slice(0, 80).join(', ')}.`
+    ? `Do NOT include: ${existingNames.slice(0, 60).join(', ')}.`
     : '';
 
-  return `You are a political analyst building a comprehensive database of Pakistani public figures and their stance on Zionism and the Israeli-Palestinian conflict.
+  return `You are a political analyst building a database of Pakistani public figures and their stance on Zionism.
 
-Focus on: ${category}
+Task: List exactly 5 Pakistani ${category} who are ANTI-ZIONIST — i.e. they oppose Zionism ideologically, support Palestinian resistance, support BDS, or describe Israel as an apartheid/colonial state.
 ${exclusions}
 
-Generate 20 Pakistani personalities from this category who have publicly expressed views on Israel, Zionism, Gaza, or the Palestinian cause.
+ANTI-ZIONIST-O-METER scoring:
+- 60-74: Mild (critical of Israeli policies, supports Palestinian rights, may support two-state)
+- 75-87: Strong (opposes Zionism ideologically, supports resistance)
+- 88-100: Extreme (only for genuinely extreme rhetoric — glorifying violence, dehumanizing language)
 
-CLASSIFICATION RULES:
-- "pro" (Zionist): Explicitly supports Israel's existence as a Jewish state, defends Israeli military actions, or advocates normalization.
-- "neutral": Supports a two-state solution, calls for peace/negotiations, ambiguous, or diplomatic. Two-state solution supporters MUST be neutral.
-- "anti" (Anti-Zionist): Opposes Zionism ideologically, supports Palestinian resistance, supports BDS, or describes Israel as apartheid/colonial.
-
-ANTI-ZIONIST-O-METER — be conservative:
-- 0-20: Strongly Zionist
-- 21-40: Leaning Zionist
-- 41-59: Neutral (two-state, ambiguous, diplomatic)
-- 60-74: Mild Anti-Zionist (critical of Israeli policies, supports Palestinian rights)
-- 75-87: Strong Anti-Zionist (opposes Zionism ideologically)
-- 88-100: Extreme (only for truly extreme rhetoric — glorifying violence, dehumanizing language)
-
-Most Pakistani public figures fall 60-80. Only use 88+ for genuinely extreme cases. Default to neutral if unclear.
-
-Respond ONLY with a valid JSON array — no markdown, no text outside JSON:
+Respond ONLY with a valid JSON array of exactly 5 objects — no markdown, nothing outside JSON:
 
 [
   {
     "name": "<full name>",
     "role": "<Politician | Government Official | Journalist | Influencer | Military | Religious Figure | Academic | Businessperson | Other>",
-    "stance": "anti" | "pro" | "neutral",
-    "meter": <integer 0-100>,
+    "stance": "anti",
+    "meter": <integer 60-100>,
+    "analysis": "<2-3 sentence factual summary>",
+    "statements": [
+      { "text": "<paraphrased or actual statement>", "source": "<context e.g. Dawn 2023>" }
+    ]
+  }
+]
+
+Return ONLY the JSON array.`;
+}
+
+function buildZionistPrompt(existingNames) {
+  const exclusions = existingNames.length > 0
+    ? `Do NOT include: ${existingNames.slice(0, 60).join(', ')}.`
+    : '';
+
+  return `You are a political analyst building a database of Pakistani public figures and their stance on Zionism.
+
+Task: List exactly 5 Pakistani personalities — from ANY field (politics, media, business, academia, military, entertainment) — who are PRO-ZIONIST or have expressed sympathy for Israel, supported normalization with Israel, opposed BDS, or defended Israeli military actions.
+${exclusions}
+
+These are rare in Pakistan so cast a wide net — include anyone who has shown even mild pro-Israel leanings, pro-normalization views, or has been critical of Palestinian militant groups.
+
+METER scoring (pro side, so low scores):
+- 0-20: Strongly Zionist (actively defends Israel)
+- 21-40: Leaning Zionist (mild support, pro-normalization, critical of anti-Israel rhetoric)
+
+Respond ONLY with a valid JSON array of exactly 5 objects — no markdown, nothing outside JSON:
+
+[
+  {
+    "name": "<full name>",
+    "role": "<Politician | Government Official | Journalist | Influencer | Military | Religious Figure | Academic | Businessperson | Other>",
+    "stance": "pro",
+    "meter": <integer 0-40>,
     "analysis": "<2-3 sentence factual summary>",
     "statements": [
       { "text": "<paraphrased or actual statement>", "source": "<context>" }
@@ -74,18 +96,100 @@ Respond ONLY with a valid JSON array — no markdown, no text outside JSON:
   }
 ]
 
-Return ONLY the JSON array with all 20 entries.`;
+Return ONLY the JSON array.`;
 }
 
-const CATEGORIES = [
-  'Pakistani Politicians (federal and provincial — PTI, PMLN, PPP, MQM, JUI, JI, and independents)',
-  'Pakistani Journalists, news anchors, columnists, and print/TV media personalities',
-  'Pakistani Religious Scholars, clerics, Imams, and Islamic organization leaders',
-  'Pakistani Military figures, ex-generals, defense analysts, and retired officers',
-  'Pakistani Social Media Influencers, YouTubers, podcasters, and digital content creators',
-  'Pakistani Academics, university professors, public intellectuals, and think tank analysts',
-  'Pakistani Government Officials, diplomats, ambassadors, ministers, and senior bureaucrats',
-  'Pakistani Businesspeople, civil society leaders, lawyers, and human rights activists',
+function buildNeutralPrompt(category, existingNames) {
+  const exclusions = existingNames.length > 0
+    ? `Do NOT include: ${existingNames.slice(0, 60).join(', ')}.`
+    : '';
+
+  return `You are a political analyst building a database of Pakistani public figures and their stance on Zionism.
+
+Task: List exactly 5 Pakistani ${category} who are NEUTRAL on Zionism — i.e. they support a two-state solution, take a diplomatic/ambiguous stance, call for peace negotiations, or avoid strong positions on Israel/Palestine.
+${exclusions}
+
+Two-state solution supporters MUST be classified neutral with meter 41-59.
+
+Respond ONLY with a valid JSON array of exactly 5 objects — no markdown, nothing outside JSON:
+
+[
+  {
+    "name": "<full name>",
+    "role": "<Politician | Government Official | Journalist | Influencer | Military | Religious Figure | Academic | Businessperson | Other>",
+    "stance": "neutral",
+    "meter": <integer 41-59>,
+    "analysis": "<2-3 sentence factual summary>",
+    "statements": [
+      { "text": "<paraphrased or actual statement>", "source": "<context>" }
+    ]
+  }
+]
+
+Return ONLY the JSON array.`;
+}
+
+async function parseAndSave(raw, redis, existingKeys, existingNames, totalAdded) {
+  let personalities = [];
+  try {
+    const clean = raw.replace(/```json|```/g, '').trim();
+    // Extract JSON array even if there's extra text
+    const match = clean.match(/\[[\s\S]*\]/);
+    if (!match) return { results: [], added: 0 };
+    personalities = JSON.parse(match[0]);
+    if (!Array.isArray(personalities)) return { results: [], added: 0 };
+  } catch {
+    return { results: [], added: 0 };
+  }
+
+  const results = [];
+  let added = 0;
+
+  for (const p of personalities) {
+    if (!p.name || !p.stance) continue;
+    const key = p.name.toLowerCase();
+    if (existingKeys.has(key)) { results.push({ name: p.name, status: 'skipped' }); continue; }
+
+    const personality = {
+      id: Date.now() + totalAdded + added,
+      name: p.name,
+      role: p.role || 'Other',
+      stance: ['pro', 'anti', 'neutral'].includes(p.stance) ? p.stance : 'neutral',
+      meter: Math.max(0, Math.min(100, parseInt(p.meter) || 50)),
+      analysis: p.analysis || '',
+      statements: Array.isArray(p.statements) ? p.statements.slice(0, 3) : [],
+      date: new Date().toISOString().split('T')[0],
+      source: 'auto-scan',
+    };
+
+    await redis.hset('personalities', { [key]: JSON.stringify(personality) });
+    existingKeys.add(key);
+    existingNames.push(p.name);
+    added++;
+    results.push({ name: p.name, status: 'added', stance: personality.stance, meter: personality.meter });
+  }
+
+  return { results, added };
+}
+
+// Categories for anti-zionist and neutral sweeps
+const ANTI_CATEGORIES = [
+  'politicians (federal — PTI, PMLN, PPP, MQM, JUI, JI)',
+  'politicians (provincial and local government)',
+  'TV journalists and news anchors',
+  'newspaper columnists and print journalists',
+  'religious scholars and clerics',
+  'military figures and defense analysts',
+  'social media influencers and YouTubers',
+  'academics and university professors',
+  'government officials and diplomats',
+  'civil society leaders and activists',
+];
+
+const NEUTRAL_CATEGORIES = [
+  'politicians and government officials',
+  'journalists and media figures',
+  'academics, diplomats, and civil society leaders',
 ];
 
 export default async function handler(req, res) {
@@ -110,57 +214,52 @@ export default async function handler(req, res) {
     let totalAdded = 0;
     const allResults = [];
 
-    for (let i = 0; i < CATEGORIES.length; i += 2) {
-      const batch = CATEGORIES.slice(i, i + 2);
-
-      const batchResults = await Promise.all(batch.map(async (category) => {
-        try {
-          const raw = await callGroq(buildScanPrompt(category, existingNames));
-          let personalities = [];
-          try {
-            const clean = raw.replace(/```json|```/g, '').trim();
-            personalities = JSON.parse(clean);
-            if (!Array.isArray(personalities)) return { category, error: 'Not an array' };
-          } catch {
-            return { category, error: 'Parse failed', raw: raw.slice(0, 200) };
-          }
-
-          const categoryResults = [];
-          for (const p of personalities) {
-            if (!p.name || !p.stance) continue;
-            const key = p.name.toLowerCase();
-            if (existingKeys.has(key)) { categoryResults.push({ name: p.name, status: 'skipped' }); continue; }
-
-            const personality = {
-              id: Date.now() + totalAdded,
-              name: p.name,
-              role: p.role || 'Other',
-              stance: ['pro', 'anti', 'neutral'].includes(p.stance) ? p.stance : 'neutral',
-              meter: Math.max(0, Math.min(100, parseInt(p.meter) || 50)),
-              analysis: p.analysis || '',
-              statements: Array.isArray(p.statements) ? p.statements.slice(0, 3) : [],
-              date: new Date().toISOString().split('T')[0],
-              source: 'auto-scan',
-            };
-
-            await redis.hset('personalities', { [key]: JSON.stringify(personality) });
-            existingKeys.add(key);
-            existingNames.push(p.name);
-            totalAdded++;
-            categoryResults.push({ name: p.name, status: 'added', stance: personality.stance, meter: personality.meter });
-          }
-
-          return { category, results: categoryResults };
-        } catch (err) {
-          return { category, error: err.message };
-        }
-      }));
-
-      allResults.push(...batchResults);
-      if (i + 2 < CATEGORIES.length) await new Promise(r => setTimeout(r, 1000));
+    // ── SWEEP 1: Anti-Zionist by category (5 per call) ──
+    for (const category of ANTI_CATEGORIES) {
+      try {
+        const raw = await callGroq(buildAntiZionistPrompt(category, existingNames));
+        const { results, added } = await parseAndSave(raw, redis, existingKeys, existingNames, totalAdded);
+        totalAdded += added;
+        allResults.push({ sweep: 'anti-zionist', category, results });
+      } catch (err) {
+        allResults.push({ sweep: 'anti-zionist', category, error: err.message });
+      }
+      await new Promise(r => setTimeout(r, 800));
     }
 
-    return res.status(200).json({ success: true, totalAdded, categoriesScanned: CATEGORIES.length, results: allResults });
+    // ── SWEEP 2: Zionist (multiple calls, 5 per call) ──
+    for (let i = 0; i < 3; i++) {
+      try {
+        const raw = await callGroq(buildZionistPrompt(existingNames));
+        const { results, added } = await parseAndSave(raw, redis, existingKeys, existingNames, totalAdded);
+        totalAdded += added;
+        allResults.push({ sweep: 'zionist', attempt: i + 1, results });
+      } catch (err) {
+        allResults.push({ sweep: 'zionist', attempt: i + 1, error: err.message });
+      }
+      await new Promise(r => setTimeout(r, 800));
+    }
+
+    // ── SWEEP 3: Neutral ──
+    for (const category of NEUTRAL_CATEGORIES) {
+      try {
+        const raw = await callGroq(buildNeutralPrompt(category, existingNames));
+        const { results, added } = await parseAndSave(raw, redis, existingKeys, existingNames, totalAdded);
+        totalAdded += added;
+        allResults.push({ sweep: 'neutral', category, results });
+      } catch (err) {
+        allResults.push({ sweep: 'neutral', category, error: err.message });
+      }
+      await new Promise(r => setTimeout(r, 800));
+    }
+
+    return res.status(200).json({
+      success: true,
+      totalAdded,
+      totalCalls: ANTI_CATEGORIES.length + 3 + NEUTRAL_CATEGORIES.length,
+      results: allResults,
+    });
+
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
